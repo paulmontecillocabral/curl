@@ -1504,9 +1504,10 @@ static char *get_netscape_format(const struct Cookie *co)
 static int cookie_output(struct CookieInfo *c, const char *filename)
 {
   struct Cookie *co;
-  FILE *out;
+  FILE *out = NULL;
   bool use_stdout = FALSE;
   char *dumphere = NULL;
+  bool error = false;
 
   if(!c)
     /* no cookie engine alive */
@@ -1569,18 +1570,39 @@ static int cookie_output(struct CookieInfo *c, const char *filename)
 
     free(array);
   }
-  if(!use_stdout) {
+
+  if(out && !use_stdout) {
     fclose(out);
-    rename(dumphere, filename);
-    free(dumphere);
+    out = NULL;
   }
 
-  return 0;
-  error:
-  if(!use_stdout)
+#ifdef WIN32
+  /* rename() on Windows doesn't overwrite, so we can't use it here.
+     MoveFileExA() will overwrite and is usually atomic, however it fails
+     when there are open handles to the file. */
+  {
+    int i = 0;
+    int max_wait_ms = 1000;
+    for(i = 0; i < max_wait_ms; ++i, Sleep(1)) {
+      if(MoveFileExA(dumphere, filename, MOVEFILE_REPLACE_EXISTING))
+        break;
+    }
+    if(i == max_wait_ms)
+      goto error;
+  }
+#else
+  if(rename(dumphere, filename))
+    goto error;
+#endif
+
+  goto cleanup;
+error:
+  error = true;
+cleanup:
+  if(out && !use_stdout)
     fclose(out);
   free(dumphere);
-  return 1;
+  return error ? 1 : 0;
 }
 
 static struct curl_slist *cookie_list(struct Curl_easy *data)
